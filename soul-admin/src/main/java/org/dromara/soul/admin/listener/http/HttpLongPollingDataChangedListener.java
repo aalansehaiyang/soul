@@ -104,24 +104,27 @@ public class HttpLongPollingDataChangedListener extends AbstractDataChangedListe
      */
     public void doLongPolling(final HttpServletRequest request, final HttpServletResponse response) {
 
-        // compare group md5
+        // 比较配置项Md5值，找出变更的配置
         List<ConfigGroupEnum> changedGroup = compareMD5(request);
         String clientIp = getRemoteIp(request);
 
         // response immediately.
         if (CollectionUtils.isNotEmpty(changedGroup)) {
+            // 如果不为空，立即响应
             this.generateResponse(response, changedGroup);
             LOGGER.info("send response with the changed group, ip={}, group={}", clientIp, changedGroup);
             return;
         }
 
         // listen for configuration changed.
+        // 开始异步模式，tomcat servlet3.1 支持
         final AsyncContext asyncContext = request.startAsync();
 
         // Asynccontext.settimeout() does not timeout properly, so you have to control it yourself
         asyncContext.setTimeout(0L);
 
         // block client's thread.
+        // 封装长轮询Runnable，立即启动，通过ScheduledExecutorService来控制延迟60秒后执行
         scheduler.execute(new LongPollingClient(asyncContext, clientIp, HttpConstants.SERVER_MAX_HOLD_TIMEOUT));
     }
 
@@ -281,7 +284,7 @@ public class HttpLongPollingDataChangedListener extends AbstractDataChangedListe
         @Override
         public void run() {
             this.asyncTimeoutFuture = scheduler.schedule(() -> {
-                clients.remove(LongPollingClient.this);
+                clients.remove(this);
                 List<ConfigGroupEnum> changedGroups = HttpLongPollingDataChangedListener.compareMD5((HttpServletRequest) asyncContext.getRequest());
                 sendResponse(changedGroups);
             }, timeoutTime, TimeUnit.MILLISECONDS);
@@ -289,13 +292,23 @@ public class HttpLongPollingDataChangedListener extends AbstractDataChangedListe
         }
 
         /**
+         *
+         * <pre>
+         * 来源：
+         * 1、后台有变更，立即触发
+         * 2、timeout到期后，触发执行
+         *
          * Send response.
          *
          * @param changedGroups the changed groups
+         *
+         *  <pre/>
          */
         void sendResponse(final List<ConfigGroupEnum> changedGroups) {
             // cancel scheduler
             if (null != asyncTimeoutFuture) {
+                // true：如果在运行中可以中断
+                // false：如果在运行中允许任务执行完
                 asyncTimeoutFuture.cancel(false);
             }
             generateResponse((HttpServletResponse) asyncContext.getResponse(), changedGroups);
